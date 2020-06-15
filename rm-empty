@@ -76,7 +76,8 @@ def main(argv):
         else:
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
-                if os.path.getsize(file_path) == 0:
+                if (os.path.isfile(file_path)
+                    and os.path.getsize(file_path) == 0):
                     empty_files.append(file_path)
                 else:
                     keep_dir = True
@@ -102,10 +103,15 @@ def main(argv):
 
     # Apply changes.
     for f in empty_files:
-        if not args.dry_run:
-            os.remove(f)
-        if not args.quiet:
-            print(f"Removed empty file: {f}")
+        try:
+            if not args.dry_run:
+                os.remove(f)
+            if not args.quiet:
+                print(f"Removed empty file: {f}")
+        except OSError as e:
+            print(f"{__name__}: Failed to remove \"{f}\": "
+                  f"{e.strerror} ({e.errno})",
+                  file=sys.stderr)
 
     for d in subdirs_to_remove:
         try:
@@ -114,7 +120,9 @@ def main(argv):
             if not args.quiet:
                 print(f"Removed empty directory: {d}")
         except OSError as e:
-            print(f"{__name__}: Failed to remove {d}: {e}", file=sys.stderr)
+            print(f"{__name__}: Failed to remove \"{d}\": "
+                  f"{e.strerror} ({e.errno})",
+                  file=sys.stderr)
     return 0
 
 
