@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+
+# rm-empty
+# Copyright (C) 2020 James D. Lin.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+"""
+Recursively removes all empty directories and empty files from a directory
+tree.
+"""
+
+import argparse
+from collections import OrderedDict
+import os
+import sys
+
+
+def normalize_path(path, assume_dir=False):
+    """
+    Normalizes a path for consistency.
+
+    If the path ends with a directory separator or if `assume_dir` is `True`,
+    assumes that the path is for a directory and returns a normalized path that
+    includes a trailing directory separator.
+    """
+    assume_dir = assume_dir or path.endswith(os.path.sep)
+    normalized = os.path.normcase(os.path.normpath(path))
+    return os.path.join(normalized, "") if assume_dir else normalized
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__.strip(), add_help=False)
+    ap.add_argument("-h", "--help", action="help",
+                    help="Show this help message and exit.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Print what would be done and do not make any "
+                         "changes.")
+    ap.add_argument("-f", "--keep-empty-files", action="store_true",
+                    help="Preserve 0-byte files.")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="Do not print what actions were performed.")
+    ap.add_argument("directory", metavar="DIRECTORY", nargs="?", default=".",
+                    help="The directory to remove empty directories/files "
+                         "from.  This directory will not be removed, even if "
+                         "it is empty.  If not specified, uses the current "
+                         "directory.")
+
+    args = ap.parse_args(argv[1:])
+
+    subdirs_to_remove = OrderedDict()
+    empty_files = []
+
+    root = normalize_path(args.directory, assume_dir=True)
+    if not os.path.isdir(root):
+        print(f"\"{root}\" is not a valid directory.", file=sys.stderr)
+        return 1
+
+    # Queue work.
+    for (dirpath, subdirs, filenames) in os.walk(root, topdown=False):
+        keep_dir = False
+        if args.keep_empty_files:
+            keep_dir = bool(filenames)
+        else:
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if os.path.getsize(file_path) == 0:
+                    empty_files.append(file_path)
+                else:
+                    keep_dir = True
+
+        if not keep_dir:
+            for subdir in subdirs:
+                subdir_path = os.path.join(dirpath, subdir)
+                if subdir_path not in subdirs_to_remove:
+                    keep_dir = True
+                    break
+        if not keep_dir:
+            subdirs_to_remove[dirpath] = None
+
+    # Never remove the initial directory.
+    try:
+        del subdirs_to_remove[root]
+    except KeyError:
+        pass
+
+    empty_files = [normalize_path(path) for path in empty_files]
+    subdirs_to_remove = [normalize_path(path, assume_dir=True)
+                         for path in subdirs_to_remove.keys()]
+
+    # Apply changes.
+    for f in empty_files:
+        if not args.dry_run:
+            os.remove(f)
+        if not args.quiet:
+            print(f"Removed empty file: {f}")
+
+    for d in subdirs_to_remove:
+        try:
+            if not args.dry_run:
+                os.rmdir(d)
+            if not args.quiet:
+                print(f"Removed empty directory: {d}")
+        except OSError as e:
+            print(f"{__name__}: Failed to remove {d}: {e}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    __name__ = os.path.basename(__file__)  # pylint: disable=redefined-builtin
+
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        sys.exit(1)
