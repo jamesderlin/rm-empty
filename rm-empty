@@ -22,6 +22,8 @@ Recursively removes all empty directories and empty files from a directory
 tree.
 """
 
+# TODO: Add an interactive mode that prompts before removal?
+
 import argparse
 from collections import OrderedDict
 import os
@@ -39,6 +41,11 @@ def normalize_path(path, assume_dir=False):
     assume_dir = assume_dir or path.endswith(os.path.sep)
     normalized = os.path.normcase(os.path.normpath(path))
     return os.path.join(normalized, "") if assume_dir else normalized
+
+
+def is_empty_file(path):
+    """Returns whether the specified path refers to a 0-byte file."""
+    return os.path.isfile(path) and os.path.getsize(path) == 0
 
 
 def main(argv):
@@ -60,6 +67,9 @@ def main(argv):
 
     args = ap.parse_args(argv[1:])
 
+    # Python's standard library doesn't include a `Set` type that preserves
+    # insertion order, so we'll use an `OrderedDict` instead where we ignore
+    # the values.
     subdirs_to_remove = OrderedDict()
     empty_files = []
 
@@ -70,25 +80,29 @@ def main(argv):
 
     # Queue work.
     for (dirpath, subdirs, filenames) in os.walk(root, topdown=False):
-        keep_dir = False
+        must_keep_dir = False
         if args.keep_empty_files:
-            keep_dir = bool(filenames)
+            # If we're keeping empty files, then the existence of *any* file
+            # means that we must keep the directory too.
+            must_keep_dir = bool(filenames)
         else:
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
-                if (os.path.isfile(file_path)
-                    and os.path.getsize(file_path) == 0):
+                if is_empty_file(file_path):
                     empty_files.append(file_path)
                 else:
-                    keep_dir = True
+                    must_keep_dir = True
 
-        if not keep_dir:
+        if not must_keep_dir:
+            # If all subdirectories have been queued for removal, then this
+            # directory may be removed too.
             for subdir in subdirs:
                 subdir_path = os.path.join(dirpath, subdir)
                 if subdir_path not in subdirs_to_remove:
-                    keep_dir = True
+                    must_keep_dir = True
                     break
-        if not keep_dir:
+
+        if not must_keep_dir:
             subdirs_to_remove[dirpath] = None
 
     # Never remove the initial directory.
