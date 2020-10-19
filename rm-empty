@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # rm-empty
+#
 # Copyright (C) 2020 James D. Lin.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,7 +16,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
 
 """
 Recursively removes all empty directories and empty files from a directory
@@ -28,9 +28,10 @@ import argparse
 from collections import OrderedDict
 import os
 import sys
+import typing
 
 
-def normalize_path(path, assume_dir=False):
+def normalize_path(path: str, assume_dir: bool = False) -> str:
     """
     Normalizes a path for consistency.
 
@@ -43,12 +44,12 @@ def normalize_path(path, assume_dir=False):
     return os.path.join(normalized, "") if assume_dir else normalized
 
 
-def is_empty_file(path):
+def is_empty_file(path: str) -> bool:
     """Returns whether the specified path refers to a 0-byte file."""
     return os.path.isfile(path) and os.path.getsize(path) == 0
 
 
-def main(argv):
+def main(argv: typing.List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip(), add_help=False)
     ap.add_argument("-h", "--help", action="help",
                     help="Show this help message and exit.")
@@ -70,8 +71,8 @@ def main(argv):
     # Python's standard library doesn't include a `Set` type that preserves
     # insertion order, so we'll use an `OrderedDict` instead where we ignore
     # the values.
-    subdirs_to_remove = OrderedDict()
-    empty_files = []
+    subdirs_to_remove = OrderedDict()  # type: OrderedDict[str, None]
+    empty_files = []  # type: typing.List[str]
 
     root = normalize_path(args.directory, assume_dir=True)
     if not os.path.isdir(root):
@@ -112,8 +113,6 @@ def main(argv):
         pass
 
     empty_files = [normalize_path(path) for path in empty_files]
-    subdirs_to_remove = [normalize_path(path, assume_dir=True)
-                         for path in subdirs_to_remove.keys()]
 
     # Apply changes.
     for f in empty_files:
@@ -127,7 +126,8 @@ def main(argv):
                   f"{e.strerror} ({e.errno})",
                   file=sys.stderr)
 
-    for d in subdirs_to_remove:
+    for d in [normalize_path(path, assume_dir=True)
+              for path in subdirs_to_remove.keys()]:
         try:
             if not args.dry_run:
                 os.rmdir(d)
