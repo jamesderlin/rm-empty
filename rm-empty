@@ -2,7 +2,7 @@
 
 # rm-empty
 #
-# Copyright (C) 2020 James D. Lin.
+# Copyright (C) 2020-2025 James D. Lin.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,8 +18,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Recursively removes all empty directories and empty files from a directory
-tree.
+Recursively removes all empty directories and empty files from specified
+directory trees.
 """
 
 # TODO: Add an interactive mode that prompts before removal?
@@ -49,40 +49,25 @@ def is_empty_file(path: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) == 0
 
 
-def main(argv: typing.List[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.strip(), add_help=False)
-    ap.add_argument("-h", "--help", action="help",
-                    help="Show this help message and exit.")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="Print what would be done and do not make any "
-                         "changes.")
-    ap.add_argument("-f", "--keep-empty-files", action="store_true",
-                    help="Preserve 0-byte files.")
-    ap.add_argument("-q", "--quiet", action="store_true",
-                    help="Do not print what actions were performed.")
-    ap.add_argument("directory", metavar="DIRECTORY", nargs="?", default=".",
-                    help="The directory to remove empty directories/files "
-                         "from.  This directory will not be removed, even if "
-                         "it is empty.  If not specified, uses the current "
-                         "directory.")
-
-    args = ap.parse_args(argv[1:])
-
-    # Python's standard library doesn't include a `Set` type that preserves
-    # insertion order, so we'll use an `OrderedDict` instead where we ignore
-    # the values.
-    subdirs_to_remove: typing.OrderedDict[str, None] = OrderedDict()
-    empty_files: typing.List[str] = []
-
-    root = normalize_path(args.directory, assume_dir=True)
+def find_empty(*,
+               root: str,
+               keep_empty_files: bool,
+               subdirs_to_remove: typing.OrderedDict[str, None],
+               empty_files: typing.OrderedDict[str, None]) -> bool:
+    """
+    Collects paths to empty directories and files within the specified root
+    path.  Empty directories and files will be added to the `subdirs_to_remove`
+    and `empty_files` output argumens.
+    """
     if not os.path.isdir(root):
-        print(f"\"{root}\" is not a valid directory.", file=sys.stderr)
-        return 1
+        print(f"{__name__}: \"{root}\" is not a valid directory.",
+              file=sys.stderr)
+        return False
 
     # Queue work.
     for (dirpath, subdirs, filenames) in os.walk(root, topdown=False):
         must_keep_dir = False
-        if args.keep_empty_files:
+        if keep_empty_files:
             # If we're keeping empty files, then the existence of *any* file
             # means that we must keep the directory too.
             must_keep_dir = bool(filenames)
@@ -90,7 +75,7 @@ def main(argv: typing.List[str]) -> int:
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 if is_empty_file(file_path):
-                    empty_files.append(file_path)
+                    empty_files[file_path] = None
                 else:
                     must_keep_dir = True
 
@@ -106,16 +91,65 @@ def main(argv: typing.List[str]) -> int:
         if not must_keep_dir:
             subdirs_to_remove[dirpath] = None
 
-    # Never remove the initial directory.
-    try:
-        del subdirs_to_remove[root]
-    except KeyError:
-        pass
+    return True
 
-    empty_files = [normalize_path(path) for path in empty_files]
+
+def main(argv: typing.List[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.strip(), add_help=False)
+    ap.add_argument("-h", "--help", action="help",
+                    help="Show this help message and exit.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Print what would be done and do not make any "
+                         "changes.")
+    ap.add_argument("-f", "--keep-empty-files", action="store_true",
+                    help="Preserve 0-byte files.")
+    ap.add_argument("--remove-empty-roots", action="store_true",
+                    help="If specified, removes the directories passed as "
+                         "command-line arguments if they are empty.")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="Do not print what actions were performed.")
+    ap.add_argument("roots", metavar="DIRECTORY", nargs="*", default=".",
+                    help="One or more directories to remove empty "
+                         "directories/files from.  By default, these "
+                         "directories will not be removed, even if they are "
+                         "empty.  If not specified, uses the current "
+                         "directory.")
+
+    args = ap.parse_args(argv[1:])
+
+    # Python's standard library doesn't include a `Set` type that preserves
+    # insertion order, so we'll use an `OrderedDict` instead where we ignore
+    # the values.
+    subdirs_to_remove: typing.OrderedDict[str, None] = OrderedDict()
+    empty_files: typing.OrderedDict[str, None] = OrderedDict()
+
+    success = True
+
+    args.roots = [normalize_path(root, assume_dir=True) for root in args.roots]
+
+    for root in args.roots:
+        if not find_empty(root=root,
+                          keep_empty_files=args.keep_empty_files,
+                          subdirs_to_remove=subdirs_to_remove,
+                          empty_files=empty_files):
+            success = False
+
+    if not args.remove_empty_roots:
+        # Avoid removing the initial directories.
+        for root in args.roots:
+            try:
+                del subdirs_to_remove[root]
+                if not args.quiet:
+                    print(f"{__name__}: Not removing argument directory: "
+                          f"{root}")
+            except KeyError:
+                pass
+
+    cwd = os.path.realpath(os.getcwd())
 
     # Apply changes.
-    for f in empty_files:
+    for f in empty_files.keys():
+        f = normalize_path(f)
         try:
             if not args.dry_run:
                 os.remove(f)
@@ -125,9 +159,13 @@ def main(argv: typing.List[str]) -> int:
             print(f"{__name__}: Failed to remove \"{f}\": "
                   f"{e.strerror} ({e.errno})",
                   file=sys.stderr)
+            success = False
 
-    for d in [normalize_path(path, assume_dir=True)
-              for path in subdirs_to_remove.keys()]:
+    for d in subdirs_to_remove.keys():
+        d = normalize_path(d, assume_dir=True)
+        if os.path.realpath(d) == cwd:
+            print(f"Not removing current directory: {d}")
+            continue
         try:
             if not args.dry_run:
                 os.rmdir(d)
@@ -137,7 +175,9 @@ def main(argv: typing.List[str]) -> int:
             print(f"{__name__}: Failed to remove \"{d}\": "
                   f"{e.strerror} ({e.errno})",
                   file=sys.stderr)
-    return 0
+            success = False
+
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
